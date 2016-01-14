@@ -18,6 +18,29 @@ from contextlib import closing
 
 Debug = False
 tempPath = "/tmp"
+ipfsGatewayPort = 8080
+
+class Command(object):
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.process = None
+
+    def run(self, timeout=0):
+        def target():
+            print 'Thread started'
+            self.process = subprocess.Popen(self.cmd, shell=True)
+            self.process.communicate()
+            print 'Thread finished'
+        thread = threading.Thread(target=target)
+        thread.start()
+        if timeout == 0:
+            return
+        thread.join(timeout)
+        if thread.is_alive():
+            print 'Terminating process'
+            self.process.terminate()
+            thread.join()
+        print self.process.returncode
 
 class downloadThread(threading.Thread):
 
@@ -42,7 +65,7 @@ class downloadThread(threading.Thread):
         self.cache["lock"].release()
 
         chunkIndex = self.startIndex
-        r = requests.get("http://127.0.0.1:8080/ipfs/" + self.cache["hash"],
+        r = requests.get("http://127.0.0.1:"+ str(ipfsGatewayPort) +"/ipfs/" + self.cache["hash"],
          headers={"range": "bytes="+ str(self.startIndex) +"-"}, stream=True, timeout=200)
         for chunk in r.iter_content(chunk_size=1024*1024*2):
             if chunk: # filter out keep-alive new chunks
@@ -283,9 +306,9 @@ class Passthrough(Operations):
             if ref == None:
                 # try to get from local
                 try:
-                    r = requests.get("http://127.0.0.1:8080/ipfs/" + info["content_hash"], headers={"range": "bytes=0-1"}, timeout=1)
+                    r = requests.get("http://127.0.0.1:" + str(ipfsGatewayPort) + "/ipfs/" + info["content_hash"], headers={"range": "bytes=0-1"}, timeout=1)
                     # only run the next step when get file success
-                    output = subprocess.Popen("ipfs pin rm " + info["content_hash"] , shell=True, stdout=subprocess.PIPE).stdout.read()
+                    Command('exec curl localhost:5001/api/v0/pin/rm?arg=' + info["content_hash"]).run(5)
                 except:
                     pass
         if Debug:
@@ -404,7 +427,7 @@ class Passthrough(Operations):
             # load data to temp file
             if Debug:
                 print "ipfs cat " + info["content_hash"] + " > " + info["content_temp_path"]
-            output = subprocess.Popen("ipfs cat " + info["content_hash"] + " > " + info["content_temp_path"] , shell=True, stdout=subprocess.PIPE).stdout.read()
+            Command("exec ipfs cat " + info["content_hash"] + " > " + info["content_temp_path"]).run(500)
             offset += info["st_size"]
         offsetRecord = 0
         self.fdCacheLock.acquire()
