@@ -16,7 +16,7 @@ import re
 import json
 from contextlib import closing
 
-Debug = False
+Debug = True
 tempPath = "/tmp"
 ipfsGatewayPort = 8080
 
@@ -56,42 +56,42 @@ class downloadThread(threading.Thread):
     def run(self):
         # add thread record
         self.cache["lock"].acquire()
-        if Debug:
-            print "download thread start " + self.cache["hash"] + " " + str(self.startIndex)
+        print "download thread start " + self.cache["hash"] + " " + str(self.startIndex)
         if self.cache["download"] != None:
-            if Debug:
-                print "Error download thread error"
+            print "Error download thread error"
         self.cache["download"] = self
         self.cache["lock"].release()
-
+        self.errorFlag = False
         chunkIndex = self.startIndex
-        r = requests.get("http://127.0.0.1:"+ str(ipfsGatewayPort) +"/ipfs/" + self.cache["hash"],
-         headers={"range": "bytes="+ str(self.startIndex) +"-"}, stream=True, timeout=200)
-        for chunk in r.iter_content(chunk_size=1024*1024*2):
-            if chunk: # filter out keep-alive new chunks
-                self.cache["lock"].acquire()
-                if chunkIndex == self.startIndex:
-                    self.cache["data"] = chunk
-                    self.cache["start"] = self.startIndex
-                else:
-                    self.cache["data"] += chunk
-                chunkIndex += len(chunk)
-                self.cache["end"] = chunkIndex
-                self.cache["lock"].release()
-            if self.stopped():
-                break
-            if self.cache["end"] -  self.cache["start"] > 40*1024*1024:
-                # max cache size 40M
-                if Debug:
+        try:
+            r = requests.get("http://127.0.0.1:"+ str(ipfsGatewayPort) +"/ipfs/" + self.cache["hash"],
+             headers={"range": "bytes="+ str(self.startIndex) +"-"}, stream=True, timeout=10)
+            for chunk in r.iter_content(chunk_size=1024*1024*2):
+                if chunk: # filter out keep-alive new chunks
+                    self.cache["lock"].acquire()
+                    if chunkIndex == self.startIndex:
+                        self.cache["data"] = chunk
+                        self.cache["start"] = self.startIndex
+                    else:
+                        self.cache["data"] += chunk
+                    chunkIndex += len(chunk)
+                    self.cache["end"] = chunkIndex
+                    self.cache["lock"].release()
+                if self.stopped():
+                    break
+                if self.cache["end"] -  self.cache["start"] > 40*1024*1024:
+                    # max cache size 40M
                     print "max cache size"
-                break
-        r.close()
+                    break
+            r.close()
+        except:
+            self.errorFlag = True
+            return
         self.cache["lock"].acquire()
         if self.cache["download"] == self:
             # download completed remove thread record
             self.cache["download"] = None
-        if Debug:
-            print "download thread end " + self.cache["hash"]
+        print "download thread end " + self.cache["hash"]
         self.cache["lock"].release()
     def stopped(self):
         return self._stop.isSet()
@@ -221,6 +221,10 @@ class Passthrough(Operations):
                 cache["lock"].release()
                 return data
             cache["lock"].release()
+            if cache["download"] != None and cache["download"].errorFlag:
+                cache["download"] = None
+                raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), hash)
+
 
     # Filesystem methods
     # ==================
@@ -237,6 +241,7 @@ class Passthrough(Operations):
             full_path = self._full_path(path)
             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), full_path)
         return info
+
 
     def readdir(self, path, fh):
         full_path = self._full_path(path)
@@ -282,7 +287,9 @@ class Passthrough(Operations):
             "st_size": 4096,
             "st_nlink": 0,
             "st_mode": 0o40777,
-            "is_deleted": False
+            "is_deleted": False,
+            "st_uid": os.getuid(),
+            "st_gid": os.getgid(),
         }
         self.filesCollection.insert_one(info)
         self.set_info(info)
@@ -306,7 +313,7 @@ class Passthrough(Operations):
             if ref == None:
                 # try to get from local
                 try:
-                    r = requests.get("http://127.0.0.1:" + str(ipfsGatewayPort) + "/ipfs/" + info["content_hash"], headers={"range": "bytes=0-1"}, timeout=1)
+                    r = requests.get("http://127.0.0.1:"+ str(ipfsGatewayPort) +"/ipfs/" + info["content_hash"], headers={"range": "bytes=0-1"}, timeout=1)
                     # only run the next step when get file success
                     Command('exec curl localhost:5001/api/v0/pin/rm?arg=' + info["content_hash"]).run(5)
                 except:
@@ -363,7 +370,7 @@ class Passthrough(Operations):
             full_path = self._full_path(path)
             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), full_path)
         if not os.path.isfile(info["content_temp_path"]):
-            subprocess.Popen("touch " + info["content_temp_path"] , shell=True, stdout=subprocess.PIPE).stdout.read()
+            return os.open(info["content_temp_path"], os.O_RDWR | os.O_CREAT)
         return os.open(info["content_temp_path"], flags)
 
     def create(self, path, mode, fi=None):
@@ -381,11 +388,13 @@ class Passthrough(Operations):
                 "st_ctime": time.time(),
                 "st_mtime": time.time(),
                 "st_size": 0,
-                "st_nlink": 0,
+                "st_nlink": 1,
                 "st_mode": 0o100777,
                 "is_deleted": False,
                 "content_temp_path": full_path,
-                "content_hash": ""
+                "content_hash": "",
+                "st_uid": os.getuid(),
+                "st_gid": os.getgid(),
             }
             self.filesCollection.insert_one(info)
             self.set_info(info)
@@ -427,7 +436,7 @@ class Passthrough(Operations):
             # load data to temp file
             if Debug:
                 print "ipfs cat " + info["content_hash"] + " > " + info["content_temp_path"]
-            Command("exec ipfs cat " + info["content_hash"] + " > " + info["content_temp_path"]).run(500)
+            Command("exec curl -s -o " + info["content_temp_path"] + " http://127.0.0.1:"+ str(ipfsGatewayPort) +"/ipfs/" + info["content_hash"]).run(500)
             offset += info["st_size"]
         offsetRecord = 0
         self.fdCacheLock.acquire()
@@ -441,11 +450,9 @@ class Passthrough(Operations):
         return os.write(fh, buf)
 
     def flush(self, path, fh):
-        start = time.time()
         if Debug:
             print "*********************flush"
-        os.fsync(fh)
-        print "after flush " + str(time.time() - start)
+        return os.fsync(fh)
 
     def save(self, info):
         self.saveQueueLock.acquire()
@@ -482,8 +489,7 @@ class Passthrough(Operations):
                         print "add to ipfs failed " + info["abs_path"]
                         print output
                         print info
-                    # try again
-                    continue
+                        break
                 if Debug:
                     print output["Hash"]
                 info["content_hash"] = output["Hash"]
@@ -496,12 +502,16 @@ class Passthrough(Operations):
                 }})
                 os.remove(info["content_temp_path"])
                 self.saveQueueLock.acquire()
-                self.saveQueue.remove(info["_id"])
+                try:
+                    self.saveQueue.remove(info["_id"])
+                except:
+                    pass
                 self.saveQueueLock.release()
                 self.set_info(info)
                 break;
 
     def release(self, path, fh):
+
         if Debug:
             print "*********************release"
         full_path = self._full_path(path)
@@ -526,7 +536,13 @@ class Passthrough(Operations):
             self.fileCache.pop(info["content_hash"], None)
             self.fileCacheLock.release()
 
-
+    def truncate(self, path, length, fh=None):
+        info = self.get_info(path)
+        if info == None or info["isdir"]:
+            full_path = self._full_path(path)
+            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), full_path)
+        with open(info["content_temp_path"], 'r+') as f:
+            f.truncate(length)
 
 
 
@@ -540,6 +556,7 @@ def main(mountpoint):
     FUSE(Passthrough(mountpoint), mountpoint, nothreads=True, foreground=True)
 
 if __name__ == '__main__':
+    print sys.argv
     if len(sys.argv) != 1 and len(sys.argv) != 2:
         print "Usage: python ipdatafs MOUNT_POINT"
     else:
