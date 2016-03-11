@@ -553,7 +553,7 @@ class Passthrough(Operations):
 
 
 def main(mountpoint):
-    FUSE(Passthrough(mountpoint), mountpoint, nothreads=True, foreground=True)
+    FUSE(Passthrough(mountpoint), mountpoint, nothreads=True, foreground=True, allow_other=True)
 
 if __name__ == '__main__':
     print sys.argv
