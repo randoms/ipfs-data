@@ -437,7 +437,6 @@ class Passthrough(Operations):
             if Debug:
                 print "ipfs cat " + info["content_hash"] + " > " + info["content_temp_path"]
             Command("exec curl -s -o " + info["content_temp_path"] + " http://127.0.0.1:"+ str(ipfsGatewayPort) +"/ipfs/" + info["content_hash"]).run(500)
-            offset += info["st_size"]
         offsetRecord = 0
         self.fdCacheLock.acquire()
         if self.fdCache.has_key(str(fh)):
