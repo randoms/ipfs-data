@@ -461,7 +461,7 @@ class Passthrough(Operations):
         self.saveQueue.append(info["_id"])
         self.saveQueueLock.release()
         while True:
-            time.sleep(60)
+            time.sleep(1)
             infoId = info["_id"]
             info = self.get_info(info["abs_path"])
             if info == None:
