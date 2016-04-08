@@ -469,8 +469,8 @@ class Passthrough(Operations):
                 self.saveQueue.remove(infoId)
                 self.saveQueueLock.release()
                 return
-            if time.time() - info["st_atime"] > 60:
-                # not touch for more than 1 min
+            if time.time() - info["st_atime"] > 10:
+                # not touch for more than 10s
                 self.ipfsLock.acquire()
                 if Debug:
                     print "############################################"
