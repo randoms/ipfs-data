@@ -213,6 +213,7 @@ class Passthrough(Operations):
             self.fileCacheLock.release()
             downloadThread(cache, start).start()
         # wait for data
+        timeoutCount = 0
         while True:
             time.sleep(0.001)
             cache["lock"].acquire()
@@ -223,6 +224,10 @@ class Passthrough(Operations):
             cache["lock"].release()
             if cache["download"] != None and cache["download"].errorFlag:
                 cache["download"] = None
+                raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), hash)
+            timeoutCount += 1
+            if timeoutCount > 10*1000:
+                # 10s still cannot read data
                 raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), hash)
 
 
@@ -369,6 +374,7 @@ class Passthrough(Operations):
         if info == None or info["isdir"]:
             full_path = self._full_path(path)
             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), full_path)
+        info["st_atime"] = time.time()
         if not os.path.isfile(info["content_temp_path"]):
             return os.open(info["content_temp_path"], os.O_RDWR | os.O_CREAT)
         return os.open(info["content_temp_path"], flags)
@@ -424,6 +430,7 @@ class Passthrough(Operations):
         print str(time.time() - start)
         if Debug:
             print "end read " + str(len(data)) + " "  + str(length)
+        info["st_atime"] = time.time()
         return data
 
     def write(self, path, buf, offset, fh):
@@ -446,6 +453,7 @@ class Passthrough(Operations):
             os.lseek(fh, offsetRecord, os.SEEK_SET)
         self.fdCache[str(fh)] = offsetRecord + len(buf)
         self.fdCacheLock.release()
+        info["st_atime"] = time.time()
         return os.write(fh, buf)
 
     def flush(self, path, fh):
